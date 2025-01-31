@@ -1,5 +1,8 @@
 import { getAsArray } from "./utils";
 import { ManifestRestrictions } from "./manifestRestrictions";
+import { WalletCollections } from "./walletCollections";
+
+
 
 /**
  * @typedef {import('./manifestRestrictions').TraitRestriction} TraitRestriction
@@ -23,8 +26,13 @@ import { ManifestRestrictions } from "./manifestRestrictions";
  */
 
 export class CharacterManifestData{
-    constructor(manifest){
+    constructor(manifest, collectionID){
       const {
+        chainName,
+        collectionLockID,
+        dataSource,
+        locked,
+
         assetsLocation,
         traitsDirectory,
         thumbnailsDirectory,
@@ -50,6 +58,22 @@ export class CharacterManifestData{
         canDownload = true,
         downloadOptions = {}
       }= manifest;
+
+      this.collectionID = collectionID;
+      // chainName:c.chainName || "ethereum",
+      // dataSource:c.dataSource || "attributes"
+      this.walletCollections = new WalletCollections();
+      
+
+      this.chainName = chainName;
+      this.dataSource = dataSource;
+      this.collectionLockID = collectionLockID;
+      if (locked == null){
+        this.locked = collectionLockID != null;
+      }
+      else{
+        this.locked = locked;
+      }
 
       this.assetsLocation = assetsLocation;
       this.traitsDirectory = traitsDirectory;
@@ -110,67 +134,70 @@ export class CharacterManifestData{
       // create texture and color traits first
       this.textureTraits = [];
       this.textureTraitsMap = null;
-      this.createTextureTraits(textureCollections);
+      this.createTextureTraits(textureCollections, false);
 
       this.decalTraits = [];
       this.decalTraitsMap = null;
-
       this.createDecalTraits(decalCollections);
 
       this.colorTraits = [];
       this.colorTraitsMap = null;
-      this.createColorTraits(colorCollections);
+      this.createColorTraits(colorCollections, false);
 
       this.modelTraits = [];
       this.modelTraitsMap = null;
-      this.createModelTraits(traits);
-
+      this.createModelTraits(traits, false);
       this.manifestRestrictions._init()
-    }
-    appendManifestData(manifestData, replaceExisting){
-      manifestData.textureTraits.forEach(newTextureTraitGroup => {
-        const textureGroup = this.getTextureGroup(newTextureTraitGroup.trait)
-        if (textureGroup != null){
-          // append
-          textureGroup.appendCollection(newTextureTraitGroup,replaceExisting)
-        }
-        else{
-          // create
-          //if (this.allowAddNewTraitGroups)
-          this.textureTraits.push(newTextureTraitGroup)
-          this.textureTraitsMap.set(newTextureTraitGroup.trait, newTextureTraitGroup);
-        }
-      });
-
-      manifestData.colorTraits.forEach(newColorTraitGroup => {
-        const colorGroup = this.getColorGroup(newColorTraitGroup.trait)
-        if (colorGroup != null){
-          // append
-          colorGroup.appendCollection(newColorTraitGroup,replaceExisting)
-        }
-        else{
-          // create
-          //if (this.allowAddNewTraitGroups)
-          this.colorTraits.push(newColorTraitGroup)
-          this.colorTraitsMap.set(newColorTraitGroup.trait, newColorTraitGroup);
-        }
-      });
-
-      manifestData.modelTraits.forEach(newModelTraitGroup => {
-        const modelGroup = this.getModelGroup(newModelTraitGroup.trait)
-        if (modelGroup != null){
-          // append
-          modelGroup.appendCollection(newModelTraitGroup,replaceExisting)
-        }
-        else{
-          // create
-          //if (this.allowAddNewTraitGroups)
-          this.modelTraits.push(newModelTraitGroup)
-          this.modelTraitsMap.set(newModelTraitGroup.trait, newModelTraitGroup);
-        }
-      });
       
-      console.log(manifestData);
+
+      //this.unlockWalletOwnedTraits();
+    }
+
+    isNFTLocked(){
+      return this.locked;
+    }
+
+    unlockWalletOwnedTraits(testWallet = null){
+      if (this.locked == false){
+        console.log(`Already unlocked`);
+        return Promise.resolve();
+      }
+      else{
+        return new Promise((resolve)=>{
+          this.walletCollections.getTraitsFromCollection(this.collectionLockID, this.chainName, this.dataSource, testWallet)
+          .then(userOwnedTraits=>{
+            const ownedIDs = userOwnedTraits.ownedIDs || [];
+            const ownedTraits = userOwnedTraits.ownedTraits || {};
+
+            // unlock all that has this id
+            if (ownedIDs.length > 0){
+              this.textureTraits.forEach(groupTrait =>{
+                groupTrait.unlockTraits(ownedIDs);
+              })
+              this.decalTraits.forEach(groupTrait =>{
+                groupTrait.unlockTraits(ownedIDs);
+              })
+              this.colorTraits.forEach(groupTrait =>{
+                groupTrait.unlockTraits(ownedIDs);
+              })
+              this.modelTraits.forEach(groupTrait => {
+                groupTrait.unlockTraits(ownedIDs)
+              });
+            }
+
+            for (const trait in ownedTraits){
+              this.unlockTraits(trait, ownedTraits[trait]);
+            }
+            resolve();
+          })
+          .catch(err=>{
+            console.log(err);
+            // resolve anyway
+            resolve();
+          })
+        })
+        
+      }
     }
 
     getExportOptions(){
@@ -184,7 +211,7 @@ export class CharacterManifestData{
     getInitialTraits(){
       return this.getRandomTraits(this.initialTraits);
     }
-    getAllTraits(){
+    getSelectionForAllTraits(){
       return this.getRandomTraits(this.allTraits);
     }
 
@@ -223,9 +250,19 @@ export class CharacterManifestData{
       return false;
     }
 
-    async getNFTraitOptionsFromURL(url, ignoreGroupTraits){
-      const nftTraits = await this._fetchJson(url);
-      return this.getNFTraitOptionsFromObject(nftTraits, ignoreGroupTraits)
+    getNFTraitOptionsFromURL(url, ignoreGroupTraits){
+      return new Promise(async (resolve) => {
+        try{
+          const nftTraits = await this._fetchJson(url);
+          resolve(this.getNFTraitOptionsFromObject(nftTraits, ignoreGroupTraits));
+        }
+        catch{
+          console.log("unable to fetch from url:", url);
+          resolve(null);
+        }
+      });
+      
+      
     }
     getNFTraitOptionsFromObject(object, ignoreGroupTraits){
       const attributes = object.attributes;
@@ -255,7 +292,7 @@ export class CharacterManifestData{
         if (traitSelectedOption)
           selectedOptions.push(traitSelectedOption)
       });
-      return this._filterTraitOptions(selectedOptions);
+      return selectedOptions;
     }
 
     getRandomTrait(groupTraitID){
@@ -296,31 +333,6 @@ export class CharacterManifestData{
       return null;
     }
 
-    // XXX filtering will only work now when multiple options are selected
-    _filterTraitOptions(selectedOptions){
-      const finalOptions = []
-      const filteredOptions = []
-      for (let i = 0 ; i < selectedOptions.length ; i++){
-        const trait = selectedOptions[i].traitModel;
-        let isRestricted = false;
-        
-        for (let j =0; j < finalOptions.length;j++){
-          const traitCompare = finalOptions[j].traitModel;
-          isRestricted = trait.isRestricted(traitCompare);
-          if (isRestricted)
-            break;
-        }
-        if (!isRestricted)
-          finalOptions.push(selectedOptions[i])
-        else
-          filteredOptions.push(selectedOptions[i])
-      }
-      if (filteredOptions.length > 0){
-        console.log("options were filtered to fullfill restrictions: ", filteredOptions);
-      }
-      return finalOptions;
-    }
-
     getCustomTraitOption(groupTraitID, url){
       const trait = this.getCustomModelTrait(groupTraitID, url);
       if (trait){
@@ -344,8 +356,25 @@ export class CharacterManifestData{
         return modelGroup.getCollection();
       }
       else{
-        console.warn("No model group with name " + groupTraitID);
         return null;
+      }
+    }
+    unlockTraits(groupTraitID, traitIDs){
+      const textureGroup = this.getTextureGroup(groupTraitID)
+      if (textureGroup){
+        textureGroup.unlockTraits(traitIDs);
+      }
+      const decalGroup = this.getDecalGroup(groupTraitID)
+      if (decalGroup){
+        decalGroup.unlockTraits(traitIDs);
+      }
+      const colorGroup = this.getColorGroup(groupTraitID)
+      if (colorGroup){
+        colorGroup.unlockTraits(traitIDs);
+      }
+      const modelGroup = this.getModelGroup(groupTraitID);
+      if (modelGroup){
+        modelGroup.unlockTraits(traitIDs);
       }
     }
     getModelGroup(groupTraitID){
@@ -416,7 +445,6 @@ export class CharacterManifestData{
     // Given an array of traits, saves an array of TraitModels
     createModelTraits(modelTraits, replaceExisting = false){
       if (replaceExisting) this.modelTraits = [];
-
       let hasTraitWithDecals = false
       getAsArray(modelTraits).forEach(traitObject => {
         const group = new TraitModelsGroup(this, traitObject)
@@ -487,14 +515,14 @@ export class TraitModelsGroup{
    * @type {CharacterManifestData}
    */
   manifestData
-
   /**
    * @type {TraitRestriction|undefined}
    */
   restrictions
 
-    constructor(manifestData, options){
+  constructor(manifestData, options){
         const {
+          locked,
           trait,
           name,
           iconSvg,
@@ -504,7 +532,10 @@ export class TraitModelsGroup{
           collection,
         } = options;
         this.manifestData = manifestData;
-
+        this.collectionID = manifestData.collectionID;
+        
+        this.locked = locked == null ? manifestData.locked : locked;
+       
         this.isRequired = manifestData.requiredTraits.indexOf(trait) !== -1;
         this.trait = trait;
         this.name = name;
@@ -518,6 +549,7 @@ export class TraitModelsGroup{
         this.collection = [];
         this.collectionMap = null;
         this.createCollection(collection);
+        
     }
 
     appendCollection(modelTraitGroup, replaceExisting){
@@ -553,11 +585,20 @@ export class TraitModelsGroup{
     }
 
     getCustomTrait(url){
-      return new ModelTrait(this, {directory:url, fullDirectory:url, id:"_custom", name:"Custom"})
+      return new ModelTrait(this, {directory:url, fullDirectory:url, collectionID:this.collectionID, id:"_custom", name:"Custom"})
     }
 
     getTrait(traitID){
       return this.collectionMap.get(traitID);
+    }
+
+    unlockTraits(traitIDs){
+      traitIDs.forEach(traitID => {
+        const trait = this.collectionMap.get(traitID);
+        if (trait != null){
+          trait.locked = false;
+        }
+      });
     }
 
     /**
@@ -569,23 +610,26 @@ export class TraitModelsGroup{
       return decalGroup.map((c)=>c?.collection).flat().filter((c)=>!!c);
     }
 
-    getTraitByIndex(index){
-      return this.collection[index];
+    getTraitByIndex(lockFilter = true){
+      const collection = this.getCollection(lockFilter)
+      return collection[index];
     }
 
-    getRandomTrait(){
-      // return SelectedTrait
-      // const traitModel = this.collection[Math.floor(Math.random() * this.collection.length)];
-      return this.collection.length > 0 ? 
-        this.collection[Math.floor(Math.random() * this.collection.length)] : 
+    getRandomTrait(lockFilter = true){
+      const collection = this.getCollection(lockFilter);
+      return collection.length > 0 ? 
+        collection[Math.floor(Math.random() * collection.length)] :
         null;
-      //traitModel
-      // return new SelectedTrait()
-      // return 
     }
 
-    getCollection(){
-      return this.collection;
+    getCollection(lockFilter = true){
+      if (lockFilter){
+        const filteredCollection = this.collection.filter((trait)=>trait.locked === false)
+        return filteredCollection;
+      }
+      else{
+        return this.collection;
+      }
     }
 
 
@@ -608,11 +652,12 @@ class TraitTexturesGroup{
       this.trait = trait;
     }
     this.manifestData = manifestData;
+    this.collectionID = manifestData.collectionID;
 
     this.collection = [];
     this.collectionMap = null;
-    this.createCollection(collection);
 
+    this.createCollection(collection);
     
   }
 
@@ -644,11 +689,21 @@ class TraitTexturesGroup{
     getAsArray(itemCollection).forEach(item => {
       this.collection.push(new TextureTrait(this, item))
     });
+
     this.collectionMap = new Map(this.collection.map(item => [item.id, item]));
   }
 
   getTrait(traitID){
     return this.collectionMap.get(traitID);
+  }
+
+  unlockTraits(traitIDs){
+    traitIDs.forEach(traitID => {
+      const trait = this.collectionMap.get(traitID);
+      if (trait != null){
+        trait.locked = false;
+      }
+    });
   }
 
   getTraitByIndex(index){
@@ -685,6 +740,7 @@ export class DecalTextureGroup{
         collection
     }= options;
     this.manifestData = manifestData;
+    this.collectionID = manifestData.collectionID;
     if(!trait){
       console.warn("DecalTextureGroup is missing property trait")
       this.trait = "undefined"+Math.floor(Math.random()*10)
@@ -693,7 +749,8 @@ export class DecalTextureGroup{
     }
     this.collection = [];
     this.collectionMap = null;
-    this.createCollection(collection);    
+    this.createCollection(collection);
+    
   }
 
   appendCollection(decalTraitGroup, replaceExisting=false){
@@ -721,14 +778,26 @@ export class DecalTextureGroup{
 
   createCollection(itemCollection, replaceExisting = false){
     if (replaceExisting) this.collection = [];
+
     getAsArray(itemCollection).forEach(item => {
       this.collection.push(new DecalTrait(this, item))
     });
+
+
     this.collectionMap = new Map(this.collection.map(item => [item.id, item]));
   }
 
   getTrait(traitID){
     return this.collectionMap.get(traitID);
+  }
+
+  unlockTraits(traitIDs){
+    traitIDs.forEach(traitID => {
+      const trait = this.collectionMap.get(traitID);
+      if (trait != null){
+        trait.locked = false;
+      }
+    });
   }
 
   getTraitByIndex(index){
@@ -748,11 +817,14 @@ class TraitColorsGroup{
         collection
     }= options;
     this.manifestData = manifestData;
+    this.collectionID = manifestData.collectionID;
     this.trait = trait;
 
     this.collection = [];
     this.collectionMap = null;
+
     this.createCollection(collection);
+
   }
 
   appendCollection(colorTraitGroup, replaceExisting){
@@ -783,11 +855,21 @@ class TraitColorsGroup{
     getAsArray(itemCollection).forEach(item => {
       this.collection.push(new ColorTrait(this, item))
     });
+
     this.collectionMap = new Map(this.collection.map(item => [item.id, item]));
   }
 
   getTrait(traitID){
     return this.collectionMap.get(traitID);
+  }
+
+  unlockTraits(traitIDs){
+    traitIDs.forEach(traitID => {
+      const trait = this.collectionMap.get(traitID);
+      if (trait != null){
+        trait.locked = false;
+      }
+    });
   }
 
   getTraitByIndex(index){
@@ -826,6 +908,7 @@ export class ModelTrait{
   _restrictedItems = []
   constructor(traitGroup, options){
       const {
+          locked,
           id,
           type = '',
           directory,
@@ -843,6 +926,10 @@ export class ModelTrait{
           restrictedItems
       }= options;
       this.manifestData = traitGroup.manifestData;
+      this.collectionID = traitGroup.collectionID;
+      
+      this.locked = locked == null ? traitGroup.locked : locked;
+
       this.traitGroup = traitGroup;
       this.decalMeshNameTargets = getAsArray(decalMeshNameTargets);
 
@@ -946,6 +1033,7 @@ export class BlendShapeGroup {
         cameraTarget = modelTrait.traitGroup.cameraTarget || { distance:3 , height:1 }
     }= options;
     this.modelTrait = modelTrait;
+    this.collectionID = modelTrait.collectionID;
     this.trait = trait;
     this.name = name;
 
@@ -1007,6 +1095,7 @@ export class BlendShapeTrait{
       }
 
       this.parentGroup = parentGroup;
+      this.collectionID = parentGroup.collectionID;
       this.id = id;
       this.fullThumbnail = fullThumbnail;
       this.name = name;
@@ -1031,6 +1120,7 @@ class TextureTrait{
           thumbnail,
       }= options;
       this.traitGroup = traitGroup;
+      this.collectionID = traitGroup.collectionID;
 
       this.id = id;
       this.directory = directory;
@@ -1093,6 +1183,7 @@ export class DecalTrait extends TextureTrait{
             thumbnail,
         }= options;
       this.traitGroup = traitGroup;
+      this.collectionID = traitGroup.collectionID;
       this.id = id;
       this.directory = directory;
       if (fullDirectory){
@@ -1126,7 +1217,7 @@ class ColorTrait{
         }= options;
 
         this.traitGroup = traitGroup;
-
+        this.collectionID = traitGroup.collectionID;
         this.id = id;
         this.name = name;
         this.value = value;

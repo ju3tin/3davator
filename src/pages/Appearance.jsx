@@ -81,7 +81,6 @@ function Appearance() {
     setIsLoading(true);
     setJsonSelectionArray(null);
     characterManager.loadRandomTraits().then(() => {
-      console.log("success")
       if (selectedTraitGroup && selectedTraitGroup.trait != ""){
         setSelectedTrait(characterManager.getCurrentTraitData(selectedTraitGroup.trait));
       }
@@ -135,7 +134,7 @@ function Appearance() {
     }
   }
   const selectTrait = (trait) => {
-    if(trait.id === selectedTrait?.id){
+    if(trait.id === selectedTrait?.id && trait.collectionID === selectedTrait?.collectionID){
       if(trait.blendshapeTraits?.length>0){
         setTraitView(TraitPage.BLEND_SHAPE);
       }
@@ -145,7 +144,7 @@ function Appearance() {
 
     setIsPickingColor(false);
     setIsLoading(true);
-    characterManager.loadTrait(trait.traitGroup.trait, trait.id).then(()=>{
+    characterManager.loadTrait(trait.traitGroup.trait, trait.id, trait.collectionID).then(()=>{
       setIsLoading(false);
       if(trait.blendshapeTraits?.length>0){
         const selectedBlendshapeTrait = characterManager.getCurrentBlendShapeTraitData(trait.traitGroup.trait);
@@ -240,6 +239,8 @@ function Appearance() {
     if (selectedTraitGroup?.trait !== traitGroup.trait){
       setTraitView(TraitPage.TRAIT);
       setTraits(characterManager.getTraits(traitGroup.trait));
+
+      console.log(characterManager.getTraits(traitGroup.trait));
       setSelectedTraitGroup(traitGroup);
 
       const selectedT = characterManager.getCurrentTraitData(traitGroup.trait)
@@ -388,13 +389,13 @@ function Appearance() {
                 )
               }
               {/* All buttons section */
-              traits.map((trait) => {
-                let active = trait.id === selectedTrait?.id
+              traits.map((trait, index) => {
+                let active = (trait.id === selectedTrait?.id && trait.collectionID === selectedTrait?.collectionID)
                 return (
                   <div
-                    key={trait.id}
+                    key={index}
                     className={`${styles["selectorButton"]}`}
-                    onClick={()=>{selectTrait(trait)}}
+                    onClick={()=>{selectTrait(trait); console.log(trait)}}
                   >
                     <TokenBox
                       size={56}
